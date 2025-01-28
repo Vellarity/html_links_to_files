@@ -25,42 +25,46 @@ pub fn main() !void {
     if (res.args.help != 0)
         std.debug.print("--help\n", .{});
     if (res.args.file) |f| {
-        const result = try parseFile(allocator, f);
-        defer result.deinit();
-        std.debug.print("lines = {}\n", .{result.items.len});
+        const result = try readScriptsFromFile(allocator, f);
+        defer {
+            for (result.items) |line| {
+                allocator.free(line);
+            }
+            result.deinit();
+        }
+        for (result.items) |value| {
+            std.debug.print("{s}\n", .{value});
+        }
     }
 }
 
-fn parseFile(allocator: std.mem.Allocator, filePath: []const u8) !std.ArrayListAligned([]u8, null) {
-    const file = try std.fs.cwd().openFile(filePath, .{});
+fn readScriptsFromFile(allocator: std.mem.Allocator, file_path: []const u8) !std.ArrayList([]const u8) {
+    const file = try std.fs.cwd().openFile(file_path, .{});
     defer file.close();
+
+    var lines = std.ArrayList([]const u8).init(allocator);
+    errdefer lines.deinit();
 
     var buf_reader = std.io.bufferedReader(file.reader());
     const reader = buf_reader.reader();
 
-    var result = std.ArrayList([]u8).init(allocator);
+    var line_buffer = std.ArrayList(u8).init(allocator);
+    defer line_buffer.deinit();
 
-    var line = std.ArrayList(u8).init(allocator);
-    defer line.deinit();
+    while (true) {
+        reader.streamUntilDelimiter(line_buffer.writer(), '\n', null) catch |err| switch (err) {
+            error.EndOfStream => break,
+            else => return err,
+        };
 
-    const writer = line.writer();
-    var line_no: usize = 0;
-    while (reader.streamUntilDelimiter(writer, '\n', null)) {
-        // Clear the line so we can reuse it.
-        line_no += 1;
+        const trim_line = std.mem.trim(u8, line_buffer.items, &[_]u8{ '\n', '\r', ' ', '\t' });
+        defer line_buffer.clearRetainingCapacity();
 
-        std.debug.print("{d}--{s}\n", .{ line_no, line.items });
-        try result.append(line.items);
-        line.clearRetainingCapacity();
-    } else |err| switch (err) {
-        error.EndOfStream => { // end of file
-            if (line.items.len > 0) {
-                line_no += 1;
-                std.debug.print("{d}--{s}\n", .{ line_no, line.items });
-            }
-        },
-        else => return err, // Propagate error
+        if (trim_line.len > 1 and std.mem.startsWith(u8, trim_line, "<script")) {
+            const trim_copy = try allocator.dupe(u8, trim_line);
+            try lines.append(trim_copy);
+        }
     }
 
-    return result;
+    return lines;
 }
