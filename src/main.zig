@@ -10,7 +10,6 @@ pub fn main() !void {
         \\-h, --help            Display this help and exit.
         \\-f, --file <str>      Path to HTML file with scripts-links.
         \\-o, --output <str>    Output path: Ends with "/" - creates dir "scripts" at given path; Ends with name - creates dir with that name at given path.
-        //\\-s, --string <str>...  An option parameter which can be specified multiple times.
     );
 
     var diag = clap.Diagnostic{};
@@ -35,6 +34,11 @@ pub fn main() !void {
         }
         removeStaticScripts(allocator, &result);
         try getLinks(allocator, &result);
+
+        const fullOutputPath = try generateExportDirectory(allocator, res.args.output orelse "");
+        defer allocator.free(fullOutputPath);
+
+        try downloadAndSaveLinks(allocator, result, fullOutputPath);
     }
 }
 
@@ -94,7 +98,31 @@ fn getLinks(allocator: std.mem.Allocator, scripts: *std.ArrayList([]const u8)) !
     }
 }
 
-//fn generateOutputDir(allocator: std.mem.Allocator, outputPath: )
+fn generateExportDirectory(allocator: std.mem.Allocator, outputPath: []const u8) ![]const u8 {
+    if (outputPath.len == 0) {
+        try std.fs.cwd().makeDir("./scripts");
+        return "./scripts";
+    } else if (std.mem.endsWith(u8, outputPath, "/")) {
+        const fullPath = try std.mem.concat(allocator, u8, &[_][]const u8{ outputPath, "scripts" });
+        try std.fs.cwd().makeDir(fullPath);
+        std.debug.print("{s}", .{fullPath});
+        return fullPath;
+    } else {
+        try std.fs.cwd().makeDir(outputPath);
+        return try allocator.dupe(u8, outputPath);
+    }
+}
+
+fn downloadAndSaveLinks(allocator: std.mem.Allocator, links: std.ArrayList([]const u8), outputPath: []const u8) !void {
+    _ = allocator.ptr;
+
+    var dir = try std.fs.cwd().openDir(outputPath, .{});
+    dir.close();
+
+    for (links.items) |link| {
+        std.debug.print("{s}\n", .{link});
+    }
+}
 
 // fn requestFileAndSave(allocator: std.mem.Allocator, link: []const u8, outputPath: null![]const u8) !void {
 // }
