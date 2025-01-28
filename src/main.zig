@@ -7,15 +7,16 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     const params = comptime clap.parseParamsComptime(
-        \\-h, --help             Display this help and exit.
-        \\-f, --file <str>       Path to HTML file with scripts-links.
+        \\-h, --help            Display this help and exit.
+        \\-f, --file <str>      Path to HTML file with scripts-links.
+        \\-o, --output <str>    Output path: Ends with "/" - creates dir "scripts" at given path; Ends with name - creates dir with that name at given path.
         //\\-s, --string <str>...  An option parameter which can be specified multiple times.
     );
 
     var diag = clap.Diagnostic{};
     var res = clap.parse(clap.Help, &params, clap.parsers.default, .{
         .diagnostic = &diag,
-        .allocator = gpa.allocator(),
+        .allocator = allocator,
     }) catch |err| {
         diag.report(std.io.getStdErr().writer(), err) catch {};
         return err;
@@ -23,18 +24,17 @@ pub fn main() !void {
     defer res.deinit();
 
     if (res.args.help != 0)
-        std.debug.print("--help\n", .{});
+        return clap.help(std.io.getStdErr().writer(), clap.Help, &params, .{});
     if (res.args.file) |f| {
-        const result = try readScriptsFromFile(allocator, f);
+        var result = try readScriptsFromFile(allocator, f);
         defer {
             for (result.items) |line| {
                 allocator.free(line);
             }
             result.deinit();
         }
-        for (result.items) |value| {
-            std.debug.print("{s}\n", .{value});
-        }
+        removeStaticScripts(allocator, &result);
+        try getLinks(allocator, &result);
     }
 }
 
@@ -68,3 +68,33 @@ fn readScriptsFromFile(allocator: std.mem.Allocator, file_path: []const u8) !std
 
     return lines;
 }
+
+fn removeStaticScripts(allocator: std.mem.Allocator, scripts: *std.ArrayList([]const u8)) void {
+    var counter: usize = 0;
+    for (scripts.items) |script| {
+        if (std.mem.indexOf(u8, script, "https") == null) {
+            allocator.free(script);
+        } else {
+            counter += 1;
+        }
+    }
+    scripts.shrinkAndFree(counter);
+}
+
+fn getLinks(allocator: std.mem.Allocator, scripts: *std.ArrayList([]const u8)) !void {
+    for (scripts.items, 0..) |script, index| {
+        const start = std.mem.indexOf(u8, script, "src=").? + 5;
+        var end = start;
+        while (end < script.len and script[end] != '"' and script[end] != '\'') {
+            end += 1;
+        }
+        const link = try allocator.dupe(u8, script[start..end]);
+        scripts.items[index] = link;
+        allocator.free(script);
+    }
+}
+
+//fn generateOutputDir(allocator: std.mem.Allocator, outputPath: )
+
+// fn requestFileAndSave(allocator: std.mem.Allocator, link: []const u8, outputPath: null![]const u8) !void {
+// }
