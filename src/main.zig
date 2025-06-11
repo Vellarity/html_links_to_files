@@ -1,14 +1,17 @@
 const std = @import("std");
 const clap = @import("clap");
 
+const Allocator = std.mem.Allocator;
+
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
+    // TODO: ADD \\-l, --link <str>      Link to html page - search for scripts-links at given page. Use when -f doesn't set
     const params = comptime clap.parseParamsComptime(
         \\-h, --help            Display this help and exit.
-        \\-f, --file <str>      Path to HTML file with scripts-links.
+        \\-f, --file <str>      Path to HTML file with scripts-links. Use when -l doesn't set
         \\-o, --output <str>    Output path: Ends with "/" - creates dir "scripts" at given path; Ends with name - creates dir with that name at given path.
     );
 
@@ -32,17 +35,22 @@ pub fn main() !void {
             }
             result.deinit();
         }
+
         removeStaticScripts(allocator, &result);
         try getLinks(allocator, &result);
 
         const fullOutputPath = try generateExportDirectory(allocator, res.args.output orelse "");
         defer allocator.free(fullOutputPath);
 
-        try downloadAndSaveLinks(allocator, result, fullOutputPath);
+        try downloadAndSaveFiles(allocator, result, fullOutputPath);
     }
+    // TODO: Add readScriptsFromLink
+    // if (res.args.link) |l| {
+    //     //var result = try readScriptsFromLink(allocator, l);
+    // }
 }
 
-fn readScriptsFromFile(allocator: std.mem.Allocator, file_path: []const u8) !std.ArrayList([]const u8) {
+fn readScriptsFromFile(allocator: Allocator, file_path: []const u8) !std.ArrayList([]const u8) {
     const file = try std.fs.cwd().openFile(file_path, .{});
     defer file.close();
 
@@ -73,19 +81,21 @@ fn readScriptsFromFile(allocator: std.mem.Allocator, file_path: []const u8) !std
     return lines;
 }
 
-fn removeStaticScripts(allocator: std.mem.Allocator, scripts: *std.ArrayList([]const u8)) void {
-    var counter: usize = 0;
-    for (scripts.items) |script| {
-        if (std.mem.indexOf(u8, script, "https") == null) {
+// TODO: Add readScriptsFromLink
+// fn readScriptsFromLink(allocator: Allocator, link: []const u8) !std.ArrayList([]const u8) {
+
+// }
+
+fn removeStaticScripts(allocator: Allocator, scripts: *std.ArrayList([]const u8)) void {
+    for (scripts.items, 0..) |script, index| {
+        if (std.mem.indexOf(u8, script, "http") == null) {
             allocator.free(script);
-        } else {
-            counter += 1;
+            _ = scripts.swapRemove(index);
         }
     }
-    scripts.shrinkAndFree(counter);
 }
 
-fn getLinks(allocator: std.mem.Allocator, scripts: *std.ArrayList([]const u8)) !void {
+fn getLinks(allocator: Allocator, scripts: *std.ArrayList([]const u8)) !void {
     for (scripts.items, 0..) |script, index| {
         const start = std.mem.indexOf(u8, script, "src=").? + 5;
         var end = start;
@@ -98,31 +108,86 @@ fn getLinks(allocator: std.mem.Allocator, scripts: *std.ArrayList([]const u8)) !
     }
 }
 
-fn generateExportDirectory(allocator: std.mem.Allocator, outputPath: []const u8) ![]const u8 {
+fn generateExportDirectory(allocator: Allocator, outputPath: []const u8) ![]const u8 {
     if (outputPath.len == 0) {
-        try std.fs.cwd().makeDir("./scripts");
+        std.fs.cwd().makeDir("./scripts") catch |err| switch (err) {
+            error.PathAlreadyExists => {},
+            else => {
+                return err;
+            },
+        };
         return "./scripts";
     } else if (std.mem.endsWith(u8, outputPath, "/")) {
         const fullPath = try std.mem.concat(allocator, u8, &[_][]const u8{ outputPath, "scripts" });
-        try std.fs.cwd().makeDir(fullPath);
+        std.fs.cwd().makePath(fullPath) catch |err| switch (err) {
+            error.PathAlreadyExists => {},
+            else => {
+                return err;
+            },
+        };
         std.debug.print("{s}", .{fullPath});
         return fullPath;
     } else {
-        try std.fs.cwd().makeDir(outputPath);
+        std.fs.cwd().makePath(outputPath) catch |err| switch (err) {
+            error.PathAlreadyExists => {},
+            else => {
+                return err;
+            },
+        };
         return try allocator.dupe(u8, outputPath);
     }
 }
 
-fn downloadAndSaveLinks(allocator: std.mem.Allocator, links: std.ArrayList([]const u8), outputPath: []const u8) !void {
+fn downloadAndSaveFiles(allocator: Allocator, links: std.ArrayList([]const u8), outputPath: []const u8) !void {
     _ = allocator.ptr;
 
     var dir = try std.fs.cwd().openDir(outputPath, .{});
-    dir.close();
+    defer dir.close();
+
+    var client = std.http.Client{
+        .allocator = allocator,
+    };
+    defer client.deinit();
+
+    const headers = &[_]std.http.Header{
+        .{ .name = "X-Custom-Header", .value = "application" },
+    };
+
+    var response_body = std.ArrayList(u8).init(allocator);
+    defer response_body.deinit();
 
     for (links.items) |link| {
         std.debug.print("{s}\n", .{link});
+        const response = try client.fetch(.{
+            .method = .GET,
+            .extra_headers = headers,
+            .location = .{ .url = link },
+            .response_storage = .{ .dynamic = &response_body },
+        });
+
+        if (response.status == .ok) {
+            const file_name = try getFileNameFromLink(allocator, link);
+            defer allocator.free(file_name);
+            const file = try generateFileWithName(file_name, outputPath);
+            _ = try file.write(response_body.items);
+
+            file.close();
+        }
     }
 }
 
-// fn requestFileAndSave(allocator: std.mem.Allocator, link: []const u8, outputPath: null![]const u8) !void {
-// }
+fn getFileNameFromLink(allocator: Allocator, link: []const u8) ![]const u8 {
+    const last_slash = std.mem.lastIndexOf(u8, link, "/").? + 1;
+
+    std.debug.print("{s} \n", .{link[last_slash..link.len]});
+
+    const file_name = try allocator.dupe(u8, link[last_slash..link.len]);
+    errdefer file_name;
+
+    return file_name;
+}
+
+fn generateFileWithName(name: []const u8, dir_path: []const u8) !std.fs.File {
+    const working_dir = try std.fs.cwd().openDir(dir_path, .{});
+    return working_dir.createFile(name, .{});
+}
