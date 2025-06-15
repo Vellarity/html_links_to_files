@@ -162,7 +162,7 @@ fn readScriptsFromLink(allocator: Allocator, link: []const u8) !std.ArrayList([]
     };
 
     var response_body = std.ArrayList(u8).init(allocator);
-    errdefer response_body.deinit();
+    defer response_body.deinit();
 
     const response = try client.fetch(.{
         .method = .GET,
@@ -181,12 +181,13 @@ fn readScriptsFromLink(allocator: Allocator, link: []const u8) !std.ArrayList([]
     errdefer lines.deinit();
 
     var line_buffer = std.ArrayList(u8).init(allocator);
+    defer line_buffer.deinit();
 
     while (response_iterator.next()) |line| {
         if (line.len > 1 and std.mem.indexOf(u8, line, "<script") != null) {
             try line_buffer.appendSlice(line);
             while (response_iterator.next()) |inner_line| {
-                if (std.mem.indexOf(u8, inner_line, "</") == null or std.mem.indexOf(u8, inner_line, "/>") == null) {
+                if (std.mem.indexOf(u8, inner_line, "</") == null and std.mem.indexOf(u8, inner_line, "/>") == null) {
                     try line_buffer.appendSlice(inner_line);
                 } else {
                     break;
@@ -200,6 +201,9 @@ fn readScriptsFromLink(allocator: Allocator, link: []const u8) !std.ArrayList([]
             const trim_line = std.mem.trim(u8, one_liner, &[_]u8{ ' ', '\r', '\t', '\n' });
 
             const trim_copy = try allocator.dupe(u8, trim_line);
+
+            //std.debug.print("{s} \n---------\n", .{trim_copy});
+
             try lines.append(trim_copy);
 
             line_buffer.clearRetainingCapacity();
@@ -222,22 +226,33 @@ fn removeStaticScripts(allocator: Allocator, scripts: *std.ArrayList([]const u8)
 }
 
 fn getLinks(allocator: Allocator, scripts: *std.ArrayList([]const u8)) !void {
-    for (scripts.items, 0..) |script, index| {
-        //std.debug.print("{s} \n-------\n", .{script});
-        var start = std.mem.indexOf(u8, script, "src=");
+    var i: usize = 0;
+    while (i < scripts.items.len) {
+        var start = std.mem.indexOf(u8, scripts.items[i], "src=");
         if (start != null) {
             start.? += 5;
         } else {
-            allocator.free(script);
+            allocator.free(scripts.items[i]);
+            _ = scripts.swapRemove(i);
             continue;
         }
         var end = start.?;
-        while (end < script.len and script[end] != '"' and script[end] != '\'') {
+        while (end < scripts.items[i].len and scripts.items[i][end] != '"' and scripts.items[i][end] != '\'') {
             end += 1;
         }
-        const link = try allocator.dupe(u8, script[start.?..end]);
-        scripts.items[index] = link;
-        allocator.free(script);
+
+        _ = std.Uri.parse(scripts.items[i][start.?..end]) catch {
+            allocator.free(scripts.items[i]);
+            _ = scripts.swapRemove(i);
+            continue;
+        };
+
+        const link = try allocator.dupe(u8, scripts.items[i][start.?..end]);
+
+        allocator.free(scripts.items[i]);
+        scripts.items[i] = link;
+
+        i += 1;
     }
 }
 
@@ -287,6 +302,7 @@ fn downloadAndSaveFiles(allocator: Allocator, links: std.ArrayList([]const u8), 
     defer response_body.deinit();
 
     for (links.items) |link| {
+        //std.debug.print("LINK: {s} \n---------\n", .{link});
         const response = try client.fetch(.{
             .method = .GET,
             .extra_headers = headers,
