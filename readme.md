@@ -28,4 +28,5 @@ Development was done using Zig 0.15—you can also build the app manually using 
     > If ends with name - creates dir with that name at given path;
     > If doesn't set - - creates dir "scripts" at working path.
 </pre>
- 
+---
+*This is my first tool written in ZIG. I created it to learn the language more. (useful feeback is always welcome!)*
