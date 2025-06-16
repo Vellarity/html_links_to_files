@@ -14,7 +14,9 @@ pub fn main() !void {
         \\-h, --help            Display this help and exit.
         \\-f, --file <str>      Path to HTML file with scripts-links. Use when -l doesn't set
         \\-l, --link <str>      Link to html page - search for scripts-links at given page. Use when -f doesn't set
-        \\-o, --output <str>    Output path: Ends with "/" - creates dir "scripts" at given path; Ends with name - creates dir with that name at given path.
+        \\-o, --output <str>    Output path: 
+        \\                          Ends with "/" - creates dir "scripts" at given path; 
+        \\                          Ends with name - creates dir with that name at given path.
     );
 
     const stderr = std.io.getStdErr().writer();
