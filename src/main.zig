@@ -319,6 +319,7 @@ fn downloadAndSaveFiles(allocator: Allocator, links: std.ArrayList([]const u8), 
             _ = try file.write(response_body.items);
 
             file.close();
+            response_body.clearRetainingCapacity();
         }
     }
 }
